@@ -1,0 +1,21 @@
+product_id,product_name,category,price
+1,Laptop,Electronics,960
+2,Smartphone,Electronics,3872
+3,Tablet,Electronics,3192
+4,Headphones,Electronics,566
+5,Smartwatch,Electronics,4526
+6,T-Shirt,Clothing,3544
+7,Jeans,Clothing,3271
+8,Jacket,Clothing,3019
+9,Sneakers,Clothing,230
+10,Backpack,Clothing,1785
+11,Rice Pack,Food,869
+12,Wheat Flour,Food,2491
+13,Cooking Oil,Food,2533
+14,Biscuits,Food,1284
+15,Milk Pack,Food,4655
+16,LED TV,Electronics,3485
+17,Bluetooth Speaker,Electronics,4217
+18,Formal Shirt,Clothing,4943
+19,Energy Drink,Food,3004
+20,Chocolate Box,Food,574
