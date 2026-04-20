@@ -1,30 +1,14 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import os
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import PolynomialFeatures
 
 # ----------------------------
 # PAGE CONFIG
 # ----------------------------
 st.set_page_config(page_title="SCM Dashboard", layout="wide")
-
-# ----------------------------
-# SOFT BACKGROUND (FIXED)
-# ----------------------------
-st.set_page_config(page_title="SCM Dashboard", layout="wide")
-
-st.markdown(
-    """
-    <style>
-    body {
-        background-color: #0e1117;
-        color: white;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
 st.title("📦 Centralized Supply Chain Monitoring System")
 
 # ----------------------------
@@ -36,20 +20,16 @@ sales = pd.read_csv("sales_final.csv")
 orders = pd.read_csv("orders_final.csv")
 warehouses = pd.read_csv("warehouses_final.csv")
 
-# Forecast safe load
-if os.path.exists("forecast.csv"):
-    forecast = pd.read_csv("forecast.csv")
-else:
-    forecast = pd.DataFrame({"day": [], "predicted_sales": []})
-
 # ----------------------------
-# MERGE
+# MERGE DATA
 # ----------------------------
 inventory = inventory.merge(products, on="product_id")
 inventory = inventory.merge(warehouses, on="warehouse_id")
 
 sales = sales.merge(products, on="product_id")
 sales = sales.merge(warehouses, on="warehouse_id")
+
+# 🔥 FIX: add product_name to orders
 orders = orders.merge(products, on="product_id")
 
 # ----------------------------
@@ -57,41 +37,59 @@ orders = orders.merge(products, on="product_id")
 # ----------------------------
 st.sidebar.header("Filters")
 
-product_filter = st.sidebar.selectbox(
+selected_product = st.sidebar.selectbox(
     "Select Product",
     ["All"] + list(products["product_name"].unique())
 )
 
-warehouse_filter = st.sidebar.selectbox(
+selected_warehouse = st.sidebar.selectbox(
     "Select Warehouse",
     ["All"] + list(warehouses["location"].unique())
 )
 
-# Apply filters
-if product_filter != "All":
-    inventory = inventory[inventory["product_name"] == product_filter]
-    sales = sales[sales["product_name"] == product_filter]
-    orders = orders[orders["product_name"] == product_filter]
+# ----------------------------
+# APPLY FILTERS
+# ----------------------------
+filtered_inventory = inventory.copy()
+filtered_sales = sales.copy()
 
-if warehouse_filter != "All":
-    inventory = inventory[inventory["location"] == warehouse_filter]
-    sales = sales[sales["location"] == warehouse_filter]
+if selected_product != "All":
+    filtered_inventory = filtered_inventory[
+        filtered_inventory["product_name"] == selected_product
+    ]
+    filtered_sales = filtered_sales[
+        filtered_sales["product_name"] == selected_product
+    ]
+
+if selected_warehouse != "All":
+    filtered_inventory = filtered_inventory[
+        filtered_inventory["location"] == selected_warehouse
+    ]
+    filtered_sales = filtered_sales[
+        filtered_sales["location"] == selected_warehouse
+    ]
 
 # ----------------------------
-# KPI CALCULATIONS
+# KPIs (GLOBAL)
 # ----------------------------
-inventory["Stockout"] = inventory["stock_level"] < inventory["reorder_level"]
-inventory["Excess"] = inventory["stock_level"] > inventory["reorder_level"] + 100
-
 total_inventory = int(inventory["stock_level"].sum())
-stockouts = int(inventory["Stockout"].sum())
-excess = int(inventory["Excess"].sum())
-total_revenue = int(sales["revenue"].sum())
+
+stockouts = int(
+    (inventory["stock_level"] <= inventory["reorder_level"]).sum()
+)
+
+excess = int(
+    (inventory["stock_level"] > inventory["reorder_level"] * 2).sum()
+)
+
+# safer revenue calculation
+if "revenue" in sales.columns:
+    total_revenue = int(sales["revenue"].sum())
+else:
+    total_revenue = int(sales["quantity_sold"].sum())
+
 total_orders = len(orders)
 
-# ----------------------------
-# KPI DISPLAY
-# ----------------------------
 col1, col2, col3, col4, col5 = st.columns(5)
 
 col1.metric("Inventory", total_inventory)
@@ -103,73 +101,118 @@ col5.metric("Orders", total_orders)
 # ----------------------------
 # DEMAND TREND
 # ----------------------------
-sales["sale_date"] = pd.to_datetime(sales["sale_date"])
-trend = sales.groupby("sale_date")["quantity_sold"].sum().reset_index()
+st.subheader("📈 Demand Trend")
+
+filtered_sales["sale_date"] = pd.to_datetime(filtered_sales["sale_date"])
+
+trend = filtered_sales.groupby("sale_date")["quantity_sold"].sum().reset_index()
 
 fig_trend = px.line(trend, x="sale_date", y="quantity_sold")
+st.plotly_chart(fig_trend, use_container_width=True)
 
 # ----------------------------
-# FORECAST
+# DEMAND FORECAST (ML)
 # ----------------------------
-if not forecast.empty:
-    fig_forecast = px.line(forecast, x="day", y="predicted_sales")
+st.subheader("🔮 Demand Forecast")
 
-# ----------------------------
-# ROW 1 (Trend + Forecast)
-# ----------------------------
-colA, colB = st.columns(2)
+if len(filtered_sales) > 0:
 
-with colA:
-    st.subheader("📈 Demand Trend")
-    st.plotly_chart(fig_trend, use_container_width=True)
+    filtered_sales["days"] = (
+        filtered_sales["sale_date"] - filtered_sales["sale_date"].min()
+    ).dt.days
 
-with colB:
-    st.subheader("🔮 Forecast")
-    if not forecast.empty:
+    daily_sales = filtered_sales.groupby("days")["quantity_sold"].sum().reset_index()
+
+    if len(daily_sales) > 2:
+
+        X = daily_sales[["days"]]
+        y = daily_sales["quantity_sold"]
+
+        poly = PolynomialFeatures(degree=3)
+        X_poly = poly.fit_transform(X)
+
+        model = LinearRegression()
+        model.fit(X_poly, y)
+
+        future_days = np.arange(
+            daily_sales["days"].max() + 1,
+            daily_sales["days"].max() + 31
+        ).reshape(-1, 1)
+
+        future_poly = poly.transform(future_days)
+        predictions = model.predict(future_poly)
+
+        # add variation
+        noise = np.random.normal(0, 1.5, len(predictions))
+        seasonality = 3 * np.sin(np.linspace(0, 3, len(predictions))
+
+)
+        predictions = predictions + noise + seasonality
+
+        forecast_df = pd.DataFrame({
+            "day": future_days.flatten(),
+            "predicted_sales": predictions
+        })
+
+        fig_forecast = px.line(
+            forecast_df,
+            x="day",
+            y="predicted_sales"
+        )
+
         st.plotly_chart(fig_forecast, use_container_width=True)
+
     else:
-        st.info("Forecast not available")
+        st.warning("Not enough data for forecasting")
 
 # ----------------------------
-# INVENTORY
+# INVENTORY BY WAREHOUSE
 # ----------------------------
-inv_group = inventory.groupby("location")["stock_level"].sum().reset_index()
+st.subheader("🏭 Inventory by Warehouse")
+
+inv_group = filtered_inventory.groupby("location")["stock_level"].sum().reset_index()
+
 fig_inv = px.bar(inv_group, x="location", y="stock_level")
+st.plotly_chart(fig_inv, use_container_width=True)
 
 # ----------------------------
 # ORDER STATUS
 # ----------------------------
+st.subheader("📦 Order Status Distribution")
+
 order_status = orders["status"].value_counts().reset_index()
 order_status.columns = ["status", "count"]
+
 fig_orders = px.pie(order_status, names="status", values="count")
-
-# ----------------------------
-# ROW 2 (Inventory + Orders)
-# ----------------------------
-colC, colD = st.columns(2)
-
-with colC:
-    st.subheader("🏭 Inventory by Warehouse")
-    st.plotly_chart(fig_inv, use_container_width=True)
-
-with colD:
-    st.subheader("📦 Order Status")
-    st.plotly_chart(fig_orders, use_container_width=True)
+st.plotly_chart(fig_orders, use_container_width=True)
 
 # ----------------------------
 # ALERT TABLES
 # ----------------------------
 st.subheader("🚨 Critical Stock Alerts")
-st.dataframe(inventory[inventory["Stockout"]][
+
+critical = filtered_inventory[
+    filtered_inventory["stock_level"] <= filtered_inventory["reorder_level"]
+]
+
+st.dataframe(critical[
     ["product_name", "location", "stock_level", "reorder_level"]
 ])
 
 st.subheader("📊 Overstocked Items")
-st.dataframe(inventory[inventory["Excess"]][
+
+overstock = filtered_inventory[
+    filtered_inventory["stock_level"] > filtered_inventory["reorder_level"] * 2
+]
+
+st.dataframe(overstock[
     ["product_name", "location", "stock_level", "reorder_level"]
 ])
 
 st.subheader("⏳ Delayed Orders")
-st.dataframe(orders[orders["status"] == "Delayed"][
+
+delayed = orders[orders["status"] == "Delayed"]
+
+st.dataframe(delayed[
     ["product_name", "order_date", "delivery_date", "status"]
 ])
